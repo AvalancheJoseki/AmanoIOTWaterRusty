@@ -20,17 +20,10 @@ transducer. I think pressure gagues are a form of pressure transducer.
   70	      99.561	  9.732258065	            2.431282051
  */
 
-/* New node checklist
--LoRa
+/* node information
+use LOLIN D32 in arduiono baords manager
 
-Primary detection method: ultrasonic
-Secondary detection method: pressure
-Overflow detection: contact
-
--Battery backup.
--Can detect battery voltage.
-
-ESP powered (so that it can be updated wirelessly) // this isnt a good option due to battery limitations
+a 500mAh battery will last roughly 18 hours
 
 */
 
@@ -39,27 +32,21 @@ ESP powered (so that it can be updated wirelessly) // this isnt a good option du
 #include <Amano.h>
 #include<NewPing.h>
 
-NewPing sonar(32, 33); // (trig, echo)
+
 
 byte nodeID = 8;
 Amano amano(nodeID);  // (nodeID)
 payload localStruct;
 
-int ssPin = 5, rstPin = 17, dio0Pin = 16;
+int ssPin = 5, rstPin = 17, dio0Pin = 16;       // LoRa pins
+int trigPin = 32, echoPin = 33;                 // distance pins
+int voltagePin = 34;
 
 unsigned int msgCount = 0;      // count of outgoing messages
 
-char waterChar = 'L'; 
+char waterChar = 'd'; 
 unsigned int lastWaterLevel = 0, waterLevel = 0;
 unsigned long lastContact = 0;
-
-// water level pins
-// int percent25pin = 4;
-// int percent50pin = 5;
-// int percent75pin = 6;
-// int percent90pin = 7;
-
-int voltagePin = 32;
 
 float getBatteryVoltage(byte pin){
   /* Voltage sensing methodology:
@@ -81,81 +68,86 @@ float getBatteryVoltage(byte pin){
   return (float)analog*(5.4599) - 31.026; // returns millivolts
 } // end of getBatteryVoltage ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/*int checkWaterLevel(void)
-{
-  // check water level then send command to the pump house every minutesUntilPing minutes
-  int percent25Level = 0, percent50Level = 0, percent75Level = 0, percent90Level = 0, currentLevel =100;
-  //Checks for 25%
-  digitalWrite(percent25pin, HIGH);
-  delay(20);
-  percent25Level = analogRead(A0);
-  if (percent25Level > 0)
-  {
-    currentLevel = map(percent25Level, 0, 314, 0, 50);
+int getDistanceMM(int degreesC = 24){ // (defaults to 24C)
+  /* distance measuring methodology
+  microseconds = pulseIn()
+  seconds = microseconds/1000000
+
+  speed of sound = 331m/s (but can vary depending on temperature)
+
+  meters = 331m/s * microseconds/1000000
+  millimeters = 331m/s * microseconds/1000000 * 1000
+  millimeters = 331/1000*microseconds/2 (divide by 2 to get distance to but not from)
+  millimeters = 331/2000*microseconds
+  */
+  int numSamples = 11;
+  int pulseList[numSamples] = {0};
+
+  for(int i=0; i<numSamples; i++){  // get multiple readings and store them in pulseList[]
+    digitalWrite(trigPin, LOW);
+    delayMicroseconds(5);
+    digitalWrite(trigPin, HIGH);
+    delayMicroseconds(10);
+    digitalWrite(trigPin, LOW);
+    delayMicroseconds(2);
+    pulseList[i] = pulseIn(echoPin, HIGH); 
+    delay(50);  // need a delay here, otherwise subsequent samples are inaccurate (lower)
   }
-  else
-  {
-    //Serial.println("SoMeThInG'S wRoNg");
-    currentLevel = 0;
+  
+  unsigned int duration = getMedian(pulseList, numSamples);
+
+  return (getSpeedOfSound(degreesC)/2000.0)*duration;   // convert to mm 
+} //**************************************** end of getDistanceMM ****************************************
+
+int getSpeedOfSound(int degreesC){
+  return(331.3*sqrt(1 + degreesC/273.15)); // from Wikipedia
+} //**************************************** end of getSpeedOfSound ****************************************
+
+int getMedian(int array[], int arSize){
+  int top, last = arSize - 1,  ptr, ssf, temp;
+    
+  for (top = 0; top < last; top++){
+    ssf = top;
+    for (ptr = top; ptr <= last; ptr ++){
+      if (array[ptr] < array[ssf]){  // > for descending
+        ssf = ptr;
+      }
+    }
+    temp = array[ssf];
+    array[ssf] = array[top];
+    array[top] = temp;
   }
-  //Serial.print("Checking 25%");
-  //Serial.println(analogRead(A0));
-  digitalWrite(percent25pin, LOW);
 
-  //Checks for 50%
-  digitalWrite(percent50pin, HIGH);
-  delay(20);
-  percent50Level = analogRead(A0);
-  if (percent50Level > 0)
-  {
-    currentLevel = map(percent50Level, 0, 173, 50, 75);
+  return array[arSize/2 + 1];
+} // ************************************************************ end of getMedian ************************************************************
+
+int getPercentFull(void){
+  /* water level methodology
+  The water tank is (approx) 210cm tall.
+  The water overflows at (approx) 72cm tall. 
+  */
+  int   distanceFromBottom = 2100, overflowHeight = 1720,
+        distanceFromOverFlow = distanceFromBottom - overflowHeight,
+        waterLevelMM = distanceFromBottom - getDistanceMM(),
+        waterLevelPct = 100*100.0*waterLevelMM / overflowHeight;
+  Serial.print("value: ");
+  Serial.print(waterLevelPct);
+  if(waterLevelPct%100 > 50){
+    Serial.println("rounding up");
+    return waterLevelPct/100 + 1;
   }
-  //Serial.print("Checking 50%");
-  //Serial.println(analogRead(A0));
-  digitalWrite(percent50pin, LOW);
-
-  //Checks for 75%
-  digitalWrite(percent75pin, HIGH);
-  delay(20);
-  percent75Level = analogRead(A0);
-  if (percent75Level > 0)
-  {
-    currentLevel = map(percent75Level, 0, 142, 75, 90);
+  else{
+    Serial.println("rounding down");
+    return waterLevelPct/100;
   }
-  //Serial.print("Checking 75%");
-  //Serial.println(analogRead(A0));
-  digitalWrite(percent75pin, LOW);
+} //****************************************end of getPercentFull****************************************
 
-  //Checks for 90%
-  digitalWrite(percent90pin, HIGH);
-  delay(20);
-  percent90Level = analogRead(A0);
-  if(percent90Level > 70)
-    currentLevel = 100; // likely overflowing
-  else if (percent90Level > 0)
-  {
-    currentLevel = map(percent90Level, 0, 70, 90, 100);
-  }
-  //Serial.print("Checking 90%");
-  //Serial.println(analogRead(A0));
-  digitalWrite(percent90pin, LOW);
+void setup(){
+  Serial.begin(9600);
 
-  return currentLevel;
-} //****************************************end of checkWaterLevel****************************************
-*/
-
-void setup()
-{
-  Serial.begin(9600); // initialize serial
-
-  // pinMode(percent25pin, OUTPUT);
-  // pinMode(percent50pin, OUTPUT);
-  // pinMode(percent75pin, OUTPUT);
-  // pinMode(percent90pin, OUTPUT);
-  pinMode(ssPin, OUTPUT);
-  pinMode(rstPin, OUTPUT);
-  pinMode(dio0Pin, OUTPUT);
   pinMode(voltagePin, INPUT);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
 
   if(!amano.begin(ssPin, rstPin, dio0Pin)){
       Serial.println("LoRa initialization FAILED");
@@ -168,18 +160,16 @@ void setup()
 
 } //****************************************end of setup****************************************
 
-
-void loop()
-{
-  // broadcast water level every minute
+void loop(){
+   // broadcast water level every minute
    if (amano.itsMySecond()) {
-      // waterLevel = checkWaterLevel();
-      waterLevel = getBatteryVoltage(voltagePin);
+      waterLevel = getPercentFull();
+      // waterLevel = getBatteryVoltage(voltagePin);
 
       if(waterLevel < lastWaterLevel)
-        waterChar = 'b';
+        waterChar = 'd';
       else if(waterLevel > lastWaterLevel)
-        waterChar = 'B';
+        waterChar = 'D';
 
       lastWaterLevel = waterLevel;
 
@@ -199,6 +189,4 @@ void loop()
       }
       Serial.println((char)localStruct.type);//+" "+localStruct.message);
   } 
-
-// checkWaterLevel();
 } //****************************************end of loop****************************************
