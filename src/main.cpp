@@ -53,6 +53,14 @@ byte pctFullIndex = 0;
 int pctFullAr[pctFullArSize] = {0};                       
 bool havePolled = false;
 
+/*This function removes all WiFi tasks. ConnectToNearestAP should resume if needed. From a comment in this video:
+https://www.youtube.com/watch?v=JFDiqPHw3Vc
+*/
+void turnOffWifi(void){
+// esp_now_deinit();
+// WiFi.disconnect(true);
+// WiFi.mode(WIFI_OFF);
+} // ************************************************************ end of turnOffWifi ************************************************************
 
 int getMedian(int array[], int arSize){
   int top, last = arSize - 1,  ptr, ssf, temp;
@@ -108,24 +116,29 @@ int getDistanceMM(int degreesC = 24){ // (defaults to 24C)
   int numSamples = 1;               // just get one sample (override from original method. now samples are spread throughout the minute)
   int pulseList[numSamples] = {0};
   unsigned int duration = 0;
-
-  for(int i=0; i<numSamples; i++){  // get multiple readings and store them in pulseList[]
+setCpuFrequencyMhz(240);
+  // for(int i=0; i<numSamples; i++){  // get multiple readings and store them in pulseList[]
     digitalWrite(trigPin, LOW);
     delayMicroseconds(5);
     digitalWrite(trigPin, HIGH);
     delayMicroseconds(10);
     digitalWrite(trigPin, LOW);
     delayMicroseconds(2);
-    pulseList[i] = pulseIn(echoPin, HIGH); 
-    if(numSamples > 1)
+    pulseList[0] = pulseIn(echoPin, HIGH); 
+    // if(numSamples > 1)
       delay(50);  // need a delay here, otherwise subsequent samples are inaccurate (lower)
-  }
+
+setCpuFrequencyMhz(20);
+  // }
   
   if(numSamples > 1)
     duration = getMedian(pulseList, numSamples);
   else
     duration = pulseList[0];
 
+int distance = (getSpeedOfSound(degreesC)/2000.0)*duration;
+      Serial.print(" dist(mm): ");
+      Serial.print(distance);
   return (getSpeedOfSound(degreesC)/2000.0)*duration;   // convert to mm 
 } //**************************************** end of getDistanceMM ****************************************
 
@@ -147,18 +160,28 @@ int getPercentFull(void){
   The water tank is (approx) 210cm tall.
   The water overflows at (approx) 72cm tall. 
   */
-  int   distanceFromBottom = 2100, overflowHeight = 1720,
-        distanceFromOverFlow = distanceFromBottom - overflowHeight,
-        waterLevelMM = distanceFromBottom - getDistanceMM(),
-        waterLevelPct = 100*100.0*waterLevelMM / overflowHeight;
-  Serial.print("value: ");
+ int distanceToOverflowFromSensor; // this is what the distance sensor would read as distance to overflowing water
+ if(nodeID == 12){ // rusty
+   distanceToOverflowFromSensor = 50;
+ }
+ else  if(nodeID == 18){ // freshy
+   distanceToOverflowFromSensor = 65;
+ }
+
+  int distanceToBottomFromSensor = 2100, 
+      overflowHeight = distanceToBottomFromSensor - distanceToOverflowFromSensor,
+      waterHeightMM = distanceToBottomFromSensor - getDistanceMM(),
+      waterLevelPct = 100*100.0*waterHeightMM / overflowHeight;
+
+  Serial.print(" % full: ");
   Serial.print(waterLevelPct);
+
   if(waterLevelPct%100 > 50){
-    Serial.println("rounding up");
+    Serial.println(" rounding up");
     return waterLevelPct/100 + 1;
   }
   else{
-    Serial.println("rounding down");
+    Serial.println(" rounding down");
     return waterLevelPct/100;
   }
 } //****************************************end of getPercentFull****************************************
@@ -182,6 +205,9 @@ void setup(){
     ;
   }
 
+  //attempts to extend battery life
+  // turnOffWifi();
+  setCpuFrequencyMhz(20); // very slow
 } //****************************************end of setup****************************************
 
 void loop(){
@@ -196,16 +222,18 @@ void loop(){
         Serial.println(pctFullAr[i]);
       }
 
-      if(nodeID == 12)
+      if(nodeID == 12){
         if(waterLevel < lastWaterLevel)
           waterChar = 'l';
         else if(waterLevel > lastWaterLevel)
           waterChar = 'L';
-      else if(nodeID == 18)
+      }
+      else if(nodeID == 18){
         if(waterLevel < lastWaterLevel)
           waterChar = 'w';
         else if(waterLevel > lastWaterLevel)
           waterChar = 'W';
+      }
 
       lastWaterLevel = waterLevel;
 
@@ -236,4 +264,9 @@ void loop(){
   }
   else
     havePolled = false;  
+
+  // this is an attempt to fix the hanging node issue that I suspect is low battery related.
+  if(millis()> 86400*1000){
+    ESP.restart();
+  }
 } //****************************************end of loop****************************************
