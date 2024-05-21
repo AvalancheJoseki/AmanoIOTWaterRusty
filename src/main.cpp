@@ -13,11 +13,11 @@ systems are referred to as absolute sensors.  If the top of the
 water tank (like ours) is vented, then our sensor can be a pressure
 transducer. I think pressure gagues are a form of pressure transducer.
  
- depth(m) 	psi	      10 bit resolution(cm)   12 bit resolution (cm)
-  7	        9.9561	  0.973225806	            0.243128205
-  21	      29.8683	  2.919677419	            0.729384615
-  42	      59.7366	  5.839354839	            1.458769231
-  70	      99.561	  9.732258065	            2.431282051
+ depth(m)   psi       10 bit resolution(cm)   12 bit resolution (cm)
+  7         9.9561    0.973225806             0.243128205
+  21        29.8683   2.919677419             0.729384615
+  42        59.7366   5.839354839             1.458769231
+  70        99.561    9.732258065             2.431282051
  */
 
 /* node information
@@ -52,15 +52,6 @@ const byte pctFullArSize = 12;                   // for getting values throughou
 byte pctFullIndex = 0;
 int pctFullAr[pctFullArSize] = {0};                       
 bool havePolled = false;
-
-/*This function removes all WiFi tasks. ConnectToNearestAP should resume if needed. From a comment in this video:
-https://www.youtube.com/watch?v=JFDiqPHw3Vc
-*/
-void turnOffWifi(void){
-// esp_now_deinit();
-// WiFi.disconnect(true);
-// WiFi.mode(WIFI_OFF);
-} // ************************************************************ end of turnOffWifi ************************************************************
 
 int getMedian(int array[], int arSize){
   int top, last = arSize - 1,  ptr, ssf, temp;
@@ -146,14 +137,26 @@ int getSpeedOfSound(int degreesC){
   return(331.3*sqrt(1 + degreesC/273.15)); // from Wikipedia
 } //**************************************** end of getSpeedOfSound ****************************************
 
-unsigned long combineWeatherInfo(int source, unsigned long temp, unsigned long pressure, unsigned long humidity){
-  unsigned long combined = source*1000000000;
-  combined+=100000*(temp);
-  // combined+=10000*(pressure);
-  combined+=1*(humidity);
-  return combined;
-} // *************************************************  end of combineWeatherInfo  *************************************************
+/* This function will use the 10 available digits of an unsigned long to store up to four distinct pieces of data in the digits
+The tenth digit is limited to 1,2, or 3. (billions place)
+The jenky number of digits (3 then 4 then 2) should be preserved to be compliant with flubb database
+The data goes through validation checks and all 9's indicates overflow
 
+This used to be called combineWeatherInfo, and still is in other programs
+*/
+unsigned long appendInfoToUL(int billionsPlace,  unsigned long fourDigits, unsigned long twoDigits, unsigned long threeDigits){
+  // first a validation check via (emergency) constraining. this should have been prevented elsewhere
+  billionsPlace = constrain(billionsPlace,1,3);
+  threeDigits   = constrain(threeDigits,0,999);
+  fourDigits    = constrain(fourDigits,0,9999);
+  twoDigits     = constrain(twoDigits,0,99);
+
+unsigned long combined = billionsPlace*1000000000;
+              combined+=      (fourDigits)*100000;
+              combined+=         (twoDigits)*1000;
+              combined+=          (threeDigits)*1;
+  return combined;
+} // *************************************************  end of appendInfoToUL  *************************************************
 
 int getPercentFull(void){
   /* water level methodology
@@ -171,23 +174,22 @@ int getPercentFull(void){
   int distanceToBottomFromSensor = 2100, 
       overflowHeight = distanceToBottomFromSensor - distanceToOverflowFromSensor,
       waterHeightMM = distanceToBottomFromSensor - getDistanceMM(),
-      waterLevelPct = 100*100.0*waterHeightMM / overflowHeight;
+      waterLevelPct_2dp = 100*100.0*waterHeightMM / overflowHeight;
+      Serial.printf("waterLevelPct_2dp: %d\n", waterLevelPct_2dp);
+  waterLevelPct_2dp = constrain(waterLevelPct_2dp,0,10000);
 
-  Serial.print(" % full: ");
-  Serial.print(waterLevelPct);
-
-  if(waterLevelPct%100 > 50){
+  if(waterLevelPct_2dp%100 > 50){
     Serial.println(" rounding up");
-    return waterLevelPct/100 + 1;
+    return waterLevelPct_2dp/100 + 1;
   }
   else{
     Serial.println(" rounding down");
-    return waterLevelPct/100;
+    return waterLevelPct_2dp/100;
   }
 } //****************************************end of getPercentFull****************************************
 
 void setup(){
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   pinMode(voltagePin, INPUT);
   pinMode(trigPin, OUTPUT);
@@ -206,7 +208,6 @@ void setup(){
   }
 
   //attempts to extend battery life
-  // turnOffWifi();
   setCpuFrequencyMhz(20); // very slow
 } //****************************************end of setup****************************************
 
@@ -237,7 +238,7 @@ void loop(){
 
       lastWaterLevel = waterLevel;
 
-    payload outgoingPayload = {nodeID/10, nodeID, waterChar, ++msgCount, combineWeatherInfo(1, getBatteryVoltage(voltagePin),0,waterLevel)};
+    payload outgoingPayload = {nodeID/10, nodeID, waterChar, ++msgCount, appendInfoToUL(1, getBatteryVoltage(voltagePin),0,waterLevel)};
     amano.sendMessage(&outgoingPayload);
     Serial.print((char)waterChar);
     Serial.print(" ");
